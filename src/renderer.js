@@ -2,6 +2,7 @@ import { AUDIO_CONSTANTS, validateSettings } from './audioConstants.js';
 import { measureLUFS, calculateNormalizationGain } from './lufs.js';
 import { encodeWAV } from './wavEncoder.js';
 import { readAudioMetadata } from './metadataReader.js';
+import { wsolaStretch, pitchShift, detectBPM, detectKey } from './pitcher.js';
 
 // ─── Settings Persistence ───────────────────────────────────────────────────
 const STORAGE_KEY = 'ai-mastering-settings';
@@ -2456,7 +2457,17 @@ const editorDom = {
   normalize: document.getElementById('edNormalize'),
   reverse: document.getElementById('edReverse'),
   undo: document.getElementById('edUndo'),
-  reset: document.getElementById('edReset')
+  reset: document.getElementById('edReset'),
+  pitchSemitones: document.getElementById('pitchSemitones'),
+  pitchSemitonesVal: document.getElementById('pitchSemitonesVal'),
+  pitchSpeed: document.getElementById('pitchSpeed'),
+  pitchSpeedVal: document.getElementById('pitchSpeedVal'),
+  pitchApply: document.getElementById('edPitchApply'),
+  pitcherKey: document.getElementById('pitcherKey'),
+  pitcherBpm: document.getElementById('pitcherBpm'),
+  pitcherProgress: document.getElementById('pitcherProgress'),
+  pitcherProgressBar: document.getElementById('pitcherProgressBar'),
+  pitcherProgressLabel: document.getElementById('pitcherProgressLabel')
 };
 
 function editorStatus(msg, type = 'success') {
@@ -2484,6 +2495,92 @@ function onFileLoadedForEditor() {
   updateEditorAvailability();
   renderSelection();
   drawEditorWaveform();
+  runPitcherDetection();
+}
+
+// --- Pitcher (pitch shift + tempo) ---
+function updatePitcherLabels() {
+  const st = parseFloat(editorDom.pitchSemitones.value);
+  const sp = parseFloat(editorDom.pitchSpeed.value);
+  editorDom.pitchSemitonesVal.textContent = `${st >= 0 ? '+' : ''}${st.toFixed(1)} st`;
+  editorDom.pitchSpeedVal.textContent = `${sp.toFixed(2)}x`;
+}
+
+// Background BPM + key detection after file load (non-blocking)
+function runPitcherDetection() {
+  const buf = state.file.buffer;
+  if (!buf || !editorDom.pitcherKey) return;
+  editorDom.pitcherKey.textContent = '...';
+  editorDom.pitcherBpm.textContent = '...';
+  setTimeout(() => {
+    try {
+      const chs = [];
+      for (let ch = 0; ch < buf.numberOfChannels; ch++) chs.push(buf.getChannelData(ch));
+      const bpm = detectBPM(chs, buf.sampleRate);
+      const key = detectKey(chs, buf.sampleRate);
+      if (state.file.buffer === buf) {
+        editorDom.pitcherBpm.textContent = bpm ? String(bpm) : '-';
+        editorDom.pitcherKey.textContent = key || '-';
+      }
+    } catch (e) {
+      if (state.file.buffer === buf) {
+        editorDom.pitcherBpm.textContent = '-';
+        editorDom.pitcherKey.textContent = '-';
+      }
+    }
+  }, 60);
+}
+
+async function applyPitcher() {
+  const buf = state.file.buffer;
+  if (!buf || !editorDom.pitchApply) return;
+  const semitones = parseFloat(editorDom.pitchSemitones.value);
+  const speed = parseFloat(editorDom.pitchSpeed.value);
+  const doPitch = Math.abs(semitones) >= 1e-9;
+  const doSpeed = Math.abs(speed - 1) >= 1e-9;
+  if (!doPitch && !doSpeed) {
+    editorStatus('Pitcher: nothing to apply (pitch 0, speed 1.00x)', 'error');
+    return;
+  }
+  pushEditHistory();
+  const btn = editorDom.pitchApply;
+  btn.disabled = true;
+  editorDom.pitcherProgress.classList.remove('hidden');
+  const setProg = (f, label) => {
+    editorDom.pitcherProgressBar.style.width = `${Math.round(f * 100)}%`;
+    if (label) editorDom.pitcherProgressLabel.textContent = label;
+  };
+  try {
+    const nCh = buf.numberOfChannels;
+    const channels = [];
+    for (let ch = 0; ch < nCh; ch++) channels.push(Float32Array.from(buf.getChannelData(ch)));
+    let out = channels;
+    if (doPitch) {
+      out = await pitchShift(out, semitones, (f) => setProg(f * (doSpeed ? 0.6 : 1), 'Shifting pitch...'));
+    }
+    if (doSpeed) {
+      const base = doPitch ? 0.6 : 0;
+      out = await wsolaStretch(out, speed, (f) => setProg(base + f * (1 - base), 'Stretching tempo...'));
+    }
+    setProg(1, 'Finalizing...');
+    const ctx = initAudioContext();
+    const outBuf = ctx.createBuffer(nCh, out[0].length, buf.sampleRate);
+    for (let ch = 0; ch < nCh; ch++) outBuf.getChannelData(ch).set(out[ch]);
+    applyEditedBuffer(outBuf);
+    editorDom.pitchSemitones.value = '0';
+    editorDom.pitchSpeed.value = '1';
+    updatePitcherLabels();
+    runPitcherDetection();
+    editorStatus(`Pitcher applied (${semitones >= 0 ? '+' : ''}${semitones.toFixed(1)} st, ${speed.toFixed(2)}x)`);
+  } catch (err) {
+    const prev = editorState.history.pop();
+    if (prev) applyEditedBuffer(prev);
+    editorStatus(`Pitcher failed: ${err && err.message ? err.message : err}`, 'error');
+  } finally {
+    btn.disabled = false;
+    editorDom.pitcherProgress.classList.add('hidden');
+    editorDom.undo.disabled = editorState.history.length === 0;
+  }
 }
 
 function updateEditorAvailability() {
@@ -2851,6 +2948,11 @@ if (editorDom.canvas) {
   editorDom.reverse.addEventListener('click', reverseBuffer);
   editorDom.undo.addEventListener('click', undoEdit);
   editorDom.reset.addEventListener('click', resetEdits);
+
+  editorDom.pitchSemitones.addEventListener('input', updatePitcherLabels);
+  editorDom.pitchSpeed.addEventListener('input', updatePitcherLabels);
+  editorDom.pitchApply.addEventListener('click', applyPitcher);
+  updatePitcherLabels();
 
   editorDom.undo.disabled = true;
 

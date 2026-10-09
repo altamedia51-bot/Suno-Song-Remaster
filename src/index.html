@@ -249,6 +249,30 @@
                 <button id="edReverse" class="ed-btn" data-tip="Reverse the selection, or the whole track.">Reverse</button>
               </div>
             </div>
+            <div class="editor-tool-group">
+              <h4>Pitcher</h4>
+              <div class="editor-pitcher-info">
+                <span>Key: <strong id="pitcherKey">—</strong></span>
+                <span>BPM: <strong id="pitcherBpm">—</strong></span>
+              </div>
+              <div class="editor-fade-row">
+                <label for="pitchSemitones">Pitch</label>
+                <input type="range" id="pitchSemitones" min="-6" max="6" step="0.1" value="0" aria-label="Pitch shift in semitones">
+                <span id="pitchSemitonesVal">0.0 st</span>
+              </div>
+              <div class="editor-fade-row">
+                <label for="pitchSpeed">Speed</label>
+                <input type="range" id="pitchSpeed" min="0.8" max="1.25" step="0.01" value="1" aria-label="Tempo multiplier">
+                <span id="pitchSpeedVal">1.00x</span>
+              </div>
+              <div class="editor-btn-row">
+                <button id="edPitchApply" class="ed-btn" data-tip="Apply pitch shift and/or tempo change to the whole track. Undoable.">Apply Pitcher</button>
+              </div>
+              <div class="editor-progress hidden" id="pitcherProgress">
+                <div class="editor-progress-bar" id="pitcherProgressBar"></div>
+                <span id="pitcherProgressLabel">Processing...</span>
+              </div>
+            </div>
 
             <div class="editor-tool-group">
               <h4>History</h4>
