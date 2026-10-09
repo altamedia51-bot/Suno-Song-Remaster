@@ -1,0 +1,118 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build for Windows
+        if: matrix.platform == 'win'
+        run: npm run electron:build:win -- --publish never
+
+      - name: Build for macOS
+        if: matrix.platform == 'mac'
+        run: npm run electron:build:mac -- --publish never
+
+      - name: Build for Linux
+        if: matrix.platform == 'linux'
+        run: npm run electron:build:linux -- --publish never
+
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+
+      - name: Upload macOS artifacts
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            release/*.dmg
+            release/*.zip
+
+      - name: Upload Linux artifacts
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: release/*.AppImage
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from package.json
+        id: pkg
+        run: echo "version=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name != '' && startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.pkg.outputs.version }}
+          name: ${{ github.ref_name != '' && startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.pkg.outputs.version }}
+          files: |
+            artifacts/windows-build/*
+            artifacts/macos-build/*
+            artifacts/linux-build/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          body: |
+            ## What's New in ${{ github.ref_name != '' && startsWith(github.ref, 'refs/tags/') && github.ref_name || steps.pkg.outputs.version }}
+
+            ### Audio Quality
+            - **Genuine true-peak (dBTP) limiting** — export now upsamples 4x (ITU-R BS.1770), clips inter-sample overshoots in the oversampled domain, and resamples back, so exported files are true-peak compliant instead of just sample-peak. Already-compliant audio is left untouched
+            - Real-time preview uses a matching 4x-oversampled brickwall clip after the limiter, so what you hear matches the exported file
+            - Loudness readout now reports measured true peak in dBTP
+
+            ### Bug Fixes
+            - Fixed loudness normalization running *after* the limiter, which could push peaks back above the true-peak ceiling. Both preview and export now normalize first and limit last, so make-up gain can never exceed the ceiling
+            - Fixed the "Center Bass" toggle, which was wired to the UI but never applied to the audio. It now high-passes the stereo side signal at 120 Hz to mono the low end
+
+            See the full [changelog](https://github.com/${{ github.repository }}/blob/main/README.md#changelog) for details.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
