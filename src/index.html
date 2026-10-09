@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; media-src 'self' file: blob:; connect-src 'self' ws://localhost:5173 http://localhost:5173">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' http://localhost:5173; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline'; img-src 'self' https://raw.githubusercontent.com; media-src 'self' file: blob:; connect-src 'self' ws://localhost:5173 http://localhost:5173">
   <title>AI Music Remastering</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -12,7 +12,7 @@
   <header class="top-bar" role="banner">
     <div class="top-bar-drag"></div>
     <div class="logo">
-      <img src="./image.png" alt="AI Music Remastering logo" class="logo-icon">
+      <img src="https://raw.githubusercontent.com/SUP3RMASS1VE/Suno-Song-Remaster/main/src/image.png" alt="AI Music Remastering logo" class="logo-icon">
       <div class="logo-text">
         <span class="logo-title">AI Music Remastering</span>
         <span class="logo-subtitle">Pro Mastering</span>
@@ -276,6 +276,16 @@
           <input type="checkbox" id="cleanLowEnd" checked aria-label="Enable low-end cleanup">
           <span class="toggle" aria-hidden="true"></span>
         </label>
+        <label class="toggle-row" data-tip="Silences hiss and background noise in quiet parts below the threshold.">
+          <span>Noise Gate</span>
+          <input type="checkbox" id="noiseGate" aria-label="Enable noise gate">
+          <span class="toggle" aria-hidden="true"></span>
+        </label>
+        <div class="slider-row" data-tip="Signals below this level are silenced. Lower = more aggressive gating.">
+          <span>Threshold</span>
+          <input type="range" id="noiseGateThreshold" min="-60" max="-20" step="1" value="-45" aria-label="Noise gate threshold">
+          <span class="slider-value" id="noiseGateThresholdValue">-45 dB</span>
+        </div>
       </div>
 
       <div class="settings-card">
@@ -454,7 +464,6 @@
   <div id="tooltip" class="tooltip" role="tooltip" aria-hidden="true"></div>
 
   <!-- Web patch: browser fallback for window.electronAPI (no-op inside Electron) -->
-  <script src="./browser-shim.js"></script>
   <script src="./browser-shim.js"></script>
   <script type="module" src="./renderer.js"></script>
 </body>

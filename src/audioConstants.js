@@ -41,6 +41,13 @@ export const AUDIO_CONSTANTS = {
   LIMITER_ATTACK: 0.001,
   LIMITER_RELEASE: 0.05,
   
+  // Noise gate (AudioWorklet downward gate)
+  GATE_THRESHOLD_DEFAULT: -45,
+  GATE_THRESHOLD_MIN: -60,
+  GATE_THRESHOLD_MAX: -20,
+  GATE_ATTACK: 0.003,
+  GATE_RELEASE: 0.15,
+  
   // Harshness reduction (aligned between preview and export)
   HARSHNESS_Q_4K: 2,
   HARSHNESS_GAIN_4K: -2,
@@ -55,6 +62,8 @@ export const DEFAULT_SETTINGS = {
   truePeakCeiling: -1.0,
   cleanLowEnd: true,
   glueCompression: false,
+  noiseGate: false,
+  noiseGateThreshold: -45,
   centerBass: false,
   cutMud: false,
   addAir: false,
@@ -74,6 +83,7 @@ export function validateSettings(settings) {
   
   // Clamp values
   validated.truePeakCeiling = Math.max(-3, Math.min(0, validated.truePeakCeiling));
+  validated.noiseGateThreshold = Math.max(-60, Math.min(-20, validated.noiseGateThreshold));
   validated.eqLow = Math.max(-12, Math.min(12, validated.eqLow));
   validated.eqLowMid = Math.max(-12, Math.min(12, validated.eqLowMid));
   validated.eqMid = Math.max(-12, Math.min(12, validated.eqMid));

@@ -17,6 +17,8 @@ function saveSettingsToStorage() {
       stereoWidth: dom.stereoWidth ? parseInt(dom.stereoWidth.value) : 100,
       cleanLowEnd: dom.cleanLowEnd.checked,
       glueCompression: dom.glueCompression.checked,
+      noiseGate: dom.noiseGate.checked,
+      noiseGateThreshold: parseFloat(dom.noiseGateThreshold.value),
       centerBass: dom.centerBass.checked,
       cutMud: dom.cutMud.checked,
       addAir: dom.addAir.checked,
@@ -45,6 +47,11 @@ function loadSettingsFromStorage() {
     if (s.truePeakLimit !== undefined) dom.truePeakLimit.checked = s.truePeakLimit;
     if (s.cleanLowEnd !== undefined) dom.cleanLowEnd.checked = s.cleanLowEnd;
     if (s.glueCompression !== undefined) dom.glueCompression.checked = s.glueCompression;
+    if (s.noiseGate !== undefined) dom.noiseGate.checked = s.noiseGate;
+    if (s.noiseGateThreshold !== undefined) {
+      dom.noiseGateThreshold.value = s.noiseGateThreshold;
+      dom.noiseGateThresholdValue.textContent = `${parseFloat(s.noiseGateThreshold).toFixed(0)} dB`;
+    }
     if (s.centerBass !== undefined) dom.centerBass.checked = s.centerBass;
     if (s.cutMud !== undefined) dom.cutMud.checked = s.cutMud;
     if (s.addAir !== undefined) dom.addAir.checked = s.addAir;
@@ -95,6 +102,8 @@ function captureState() {
     stereoWidth: dom.stereoWidth ? parseInt(dom.stereoWidth.value) : 100,
     cleanLowEnd: dom.cleanLowEnd.checked,
     glueCompression: dom.glueCompression.checked,
+    noiseGate: dom.noiseGate.checked,
+    noiseGateThreshold: parseFloat(dom.noiseGateThreshold.value),
     centerBass: dom.centerBass.checked,
     cutMud: dom.cutMud.checked,
     addAir: dom.addAir.checked,
@@ -122,6 +131,9 @@ function applyState(s) {
   if (dom.stereoWidth) dom.stereoWidth.value = s.stereoWidth;
   dom.cleanLowEnd.checked = s.cleanLowEnd;
   dom.glueCompression.checked = s.glueCompression;
+  dom.noiseGate.checked = s.noiseGate;
+  dom.noiseGateThreshold.value = s.noiseGateThreshold;
+  dom.noiseGateThresholdValue.textContent = `${parseFloat(s.noiseGateThreshold).toFixed(0)} dB`;
   dom.centerBass.checked = s.centerBass;
   dom.cutMud.checked = s.cutMud;
   dom.addAir.checked = s.addAir;
@@ -246,6 +258,9 @@ const dom = {
   targetLufsValue: document.getElementById('targetLufsValue'),
   cleanLowEnd: document.getElementById('cleanLowEnd'),
   glueCompression: document.getElementById('glueCompression'),
+  noiseGate: document.getElementById('noiseGate'),
+  noiseGateThreshold: document.getElementById('noiseGateThreshold'),
+  noiseGateThresholdValue: document.getElementById('noiseGateThresholdValue'),
   centerBass: document.getElementById('centerBass'),
   stereoWidth: document.getElementById('stereoWidth'),
   stereoWidthValue: document.getElementById('stereoWidthValue'),
@@ -321,6 +336,41 @@ function restartSpectrogramIfPlaying() {
 }
 
 // ─── Audio Context ──────────────────────────────────────────────────────────
+// ─── Noise Gate (AudioWorklet downward gate) ───────────────────────────────
+// The worklet module must be loaded before any AudioWorkletNode is created.
+async function ensureGateWorklet(ctx) {
+  if (ctx.__noiseGateWorkletLoaded) return true;
+  try {
+    await ctx.audioWorklet.addModule('./noise-gate-processor.js');
+    ctx.__noiseGateWorkletLoaded = true;
+    return true;
+  } catch (err) {
+    console.warn('Noise gate worklet could not load; gate will be bypassed.', err);
+    ctx.__noiseGateWorkletLoaded = false;
+    return false;
+  }
+}
+
+function createGateNode(ctx) {
+  try {
+    return new AudioWorkletNode(ctx, 'noise-gate');
+  } catch (err) {
+    console.warn('Noise gate node unavailable, using passthrough gain.', err);
+    return ctx.createGain();
+  }
+}
+
+function postGateParams(gateNode, { enabled, thresholdDb }) {
+  if (gateNode && gateNode.port) {
+    gateNode.port.postMessage({
+      enabled: !!enabled,
+      thresholdDb: thresholdDb,
+      attackSec: AUDIO_CONSTANTS.GATE_ATTACK,
+      releaseSec: AUDIO_CONSTANTS.GATE_RELEASE,
+    });
+  }
+}
+
 function initAudioContext() {
   if (!state.audio.context) {
     state.audio.context = new AudioContext();
@@ -419,6 +469,7 @@ function createProcessingNodes(ctx) {
   nodes.midPeak = ctx.createBiquadFilter();
   nodes.midPeak2 = ctx.createBiquadFilter();
   nodes.compressor = ctx.createDynamicsCompressor();
+  nodes.gate = createGateNode(ctx); // noise gate, first in chain
   nodes.limiter = ctx.createDynamicsCompressor();
   nodes.ceilingClip = ctx.createWaveShaper(); // brickwall clamp after the limiter
   nodes.ceilingClip.oversample = '4x';
@@ -449,8 +500,9 @@ function createProcessingNodes(ctx) {
 }
 
 // ─── Preview Audio Chain ────────────────────────────────────────────────────
-function createAudioChain() {
+async function createAudioChain() {
   const ctx = initAudioContext();
+  await ensureGateWorklet(ctx);
 
   // Analysers — use smaller FFT for level meters (faster)
   state.audio.analyser = ctx.createAnalyser();
@@ -510,6 +562,11 @@ function updateAudioChain() {
     nodes.compressor.ratio.value = 1;
   }
 
+  postGateParams(nodes.gate, {
+    enabled: dom.noiseGate.checked && !bypassed,
+    thresholdDb: parseFloat(dom.noiseGateThreshold.value),
+  });
+
   if (dom.truePeakLimit.checked && !bypassed) {
     const ceiling = parseFloat(dom.truePeakSlider.value);
     nodes.limiter.threshold.value = ceiling;
@@ -549,6 +606,7 @@ function connectAudioChain(source) {
   const nodes = state.audio.nodes;
 
   source
+    .connect(nodes.gate)
     .connect(nodes.inputGain)
     .connect(nodes.highpass)
     .connect(nodes.eqLow)
@@ -726,7 +784,7 @@ async function loadAudioFile(filePath) {
     const targetLufs = dom.targetLufs ? parseInt(dom.targetLufs.value) : AUDIO_CONSTANTS.TARGET_LUFS;
     state.file.normGain = calculateNormalizationGain(state.file.lufs, targetLufs);
 
-    createAudioChain();
+    await createAudioChain();
 
     state.file.duration = state.file.buffer.duration;
     dom.durationEl.textContent = formatTime(state.file.duration);
@@ -1275,6 +1333,7 @@ async function processAudioOffline(settings) {
   const outputLength = Math.ceil(inputBuffer.length * targetSampleRate / inputBuffer.sampleRate);
 
   const offlineCtx = new OfflineAudioContext(numChannels, outputLength, targetSampleRate);
+  await ensureGateWorklet(offlineCtx);
 
   const source = offlineCtx.createBufferSource();
   source.buffer = inputBuffer;
@@ -1296,6 +1355,11 @@ async function processAudioOffline(settings) {
 
   // Configure filters using shared function
   configureFilterNodes(nodes, settings);
+
+  postGateParams(nodes.gate, {
+    enabled: !!settings.noiseGate,
+    thresholdDb: settings.noiseGateThreshold,
+  });
 
   // Glue compressor config
   if (settings.glueCompression) {
@@ -1321,6 +1385,7 @@ async function processAudioOffline(settings) {
 
   // Connect the chain including mid-side processing (no limiter here)
   source
+    .connect(nodes.gate)
     .connect(nodes.inputGain)
     .connect(nodes.highpass)
     .connect(nodes.eqLow)
@@ -1559,6 +1624,8 @@ dom.processBtn.addEventListener('click', async () => {
     stereoWidth: dom.stereoWidth ? parseInt(dom.stereoWidth.value) : 100,
     cleanLowEnd: dom.cleanLowEnd.checked,
     glueCompression: dom.glueCompression.checked,
+    noiseGate: dom.noiseGate.checked,
+    noiseGateThreshold: parseFloat(dom.noiseGateThreshold.value),
     centerBass: dom.centerBass.checked,
     cutMud: dom.cutMud.checked,
     addAir: dom.addAir.checked,
@@ -1627,7 +1694,7 @@ function updateChecklist() {
 
 // ─── Settings Change Handlers ───────────────────────────────────────────────
 [dom.normalizeLoudness, dom.truePeakLimit, dom.cleanLowEnd, dom.glueCompression,
- dom.centerBass, dom.cutMud, dom.addAir, dom.tameHarsh].forEach(el => {
+ dom.centerBass, dom.cutMud, dom.addAir, dom.tameHarsh, dom.noiseGate].forEach(el => {
   el.addEventListener('change', () => {
     pushUndo();
     updateAudioChain();
@@ -1646,6 +1713,14 @@ dom.truePeakSlider.addEventListener('input', () => {
     dom.ceilingFill.style.height = `${percent}%`;
   }
 
+  updateAudioChain();
+  saveSettingsToStorage();
+});
+
+dom.noiseGateThreshold.addEventListener('mousedown', () => pushUndo());
+dom.noiseGateThreshold.addEventListener('input', () => {
+  const threshold = parseFloat(dom.noiseGateThreshold.value);
+  dom.noiseGateThresholdValue.textContent = `${threshold.toFixed(0)} dB`;
   updateAudioChain();
   saveSettingsToStorage();
 });
@@ -2235,6 +2310,8 @@ batchDom.exportBtn.addEventListener('click', async () => {
     stereoWidth: dom.stereoWidth ? parseInt(dom.stereoWidth.value) : 100,
     cleanLowEnd: dom.cleanLowEnd.checked,
     glueCompression: dom.glueCompression.checked,
+    noiseGate: dom.noiseGate.checked,
+    noiseGateThreshold: parseFloat(dom.noiseGateThreshold.value),
     centerBass: dom.centerBass.checked,
     cutMud: dom.cutMud.checked,
     addAir: dom.addAir.checked,
@@ -2431,7 +2508,7 @@ function applyEditedBuffer(newBuffer) {
   const targetLufs = dom.targetLufs ? parseInt(dom.targetLufs.value) : AUDIO_CONSTANTS.TARGET_LUFS;
   state.file.normGain = calculateNormalizationGain(state.file.lufs, targetLufs);
 
-  createAudioChain();
+  createAudioChain(); // fire-and-forget: worklet already loaded from initial file load
 
   const sr = newBuffer.sampleRate;
   const ch = newBuffer.numberOfChannels;
